@@ -1,0 +1,541 @@
+---
+title: 'Experiment 1: N x Visual Field'
+author: "Adam Parker"
+date: "23/01/2020"
+output: pdf_document
+---
+
+This script reads in data for a replication of Perea, Acha, and Fraga (2008), Experiment 1 using an English sample. Rather than analyses the data using ANOVAs, we use LMMs to analyses the data. This study was pre-registered on the Open Science Framework: https://osf.io/trenb
+
+In this pre-registration we define a successful replication as metting the following criteria: 
+
+1) observing faster reaction times and reduced errors in the central visual field relative to the mean of the left and right visual fields.
+2) observing faster reaction times and reduced errors in the right visual field relative to the left visual field.
+3) a facilitative effect of orthographic neighbourhood in the left visual field (i.e., right hemisphere) and an inhibitory effect of orthographic neighbourhood in the right visual field (left hemisphere) in reaction times for word targets. 
+
+While we plan on analysing error rate, it may not be sensitive enough to capture the effects of orthographic N. Thus, it is not part of our criteria for successful replication. 
+
+Below, we adopt run the pre-registered analyses. 
+
+```{r setup, include=FALSE}
+library(readr)
+library(yarrr)
+library(lme4)
+library(effects)
+library(multcomp)
+library(dplyr)
+library(simr)
+library(ggplot2)
+library(car)
+library(lattice)
+
+```
+
+# Demographics
+
+Here, we look up the age and gender of participants. This is then maintained in a data frame until we have worked out whether participants are removed or not.
+
+``` {r demo}
+demo_dat <- read_csv("data_exp_10222-v13_questionnaire-xcos.csv")
+
+# code subject
+demo_dat$subject <- demo_dat$`Participant Private ID`
+demo_dat$subject <- as.factor(demo_dat$subject)
+# count and print subjects
+nsub <-length(levels(demo_dat$subject))
+
+# create data frame
+demographics <- data.frame(matrix(ncol = 3, nrow = nsub))
+  colnames(demographics) <- c("subject", "age", "gender")
+myrow <- 0 # start row counter
+for (i in 1:nsub) { # loop through subjects
+  subname <- levels(demo_dat$subject)[i] # find subject ID
+  myrows <- which(demo_dat$subject==subname) # select rows for this subject
+  tmp <- data.frame(demo_dat[myrows,])
+
+    myrow <- myrow+1
+
+    demographics$subject[myrow] <- subname
+    demographics$age[myrow] <- tmp[tmp$Question.Key == "Age",]$Response
+    demographics$gender[myrow] <- tmp[tmp$Question.Key == "Gender",]$Response
+  }
+```
+
+# Edinburgh Handedness inventory
+
+Now we add the EHI to the demographic data. Here we score and plot the Edinburgh handedness inventory (Oldfield, 1971) in its short form. 
+
+To ensure that our participants are all right-handed to the same degree as Perea et al., we specieifed that we would remove and replace participants who score less than 80 on the Edinburgh Handedness Inventory.
+
+```{r EHI, warning=FALSE}
+EHI <- read_csv("data_exp_10222-v13_questionnaire-mk5p.csv")
+
+# select only responses
+EHI <- EHI[EHI$`Question Key` == "response-2-quantised" | EHI$`Question Key` == "response-3-quantised" | 
+           EHI$`Question Key` == "response-4-quantised" | EHI$`Question Key` == "response-5-quantised" |
+           EHI$`Question Key` == "response-6-quantised" | EHI$`Question Key` == "response-7-quantised" | 
+           EHI$`Question Key` == "response-8-quantised" | EHI$`Question Key` == "response-9-quantised" |
+           EHI$`Question Key` == "response-10-quantised" | EHI$`Question Key` == "response-11-quantised" | 
+           EHI$`Question Key` == "response-12-quantised" | EHI$`Question Key` == "response-13-quantised" |
+           EHI$`Question Key` == "response-14-quantised" | EHI$`Question Key` == "response-15-quantised" | 
+           EHI$`Question Key` == "response-16-quantised" | EHI$`Question Key` == "response-17-quantised" |
+           EHI$`Question Key` == "response-18-quantised" | EHI$`Question Key` == "response-19-quantised" | 
+           EHI$`Question Key` == "response-20-quantised",]
+
+# recode variabels
+EHI$subject <- EHI$`Participant Private ID`
+EHI$subject <- as.factor(EHI$subject)
+
+# reduce data
+# new data
+meaningful <- c("subject", "Question Key", "Response") # select wanted columns
+c<-which(names(EHI) %in% meaningful) #find colnumbers of unwanted
+EHI <-EHI[,c] #remove unwanted columns
+EHI <- na.omit(EHI) # remove NAs
+
+# score responses accoridng to the original scoring method in Oldifeld (1971)
+EHI$right_hand <- 0
+EHI$left_hand <- 0
+for (r in 1:nrow(EHI)) {
+  if(EHI$Response[r] == 1){
+    EHI$right_hand[r]= 2 
+  } else {
+    if(EHI$Response[r] == 2){
+      EHI$right_hand[r]= 1
+    } else {
+      if(EHI$Response[r] == 4){
+        EHI$left_hand[r]= 1
+      } else {
+        if(EHI$Response[r] == 5){
+          EHI$left_hand[r]= 2 
+        } else {
+          (EHI$right_hand[r]= 1) & (EHI$left_hand[r]= 1)
+        }
+      }
+    }
+  }
+}
+
+# re-reduce data
+# new data
+meaningful <- c("subject", "right_hand", "left_hand") # select wanted columns
+c<-which(names(EHI) %in% meaningful) #find colnumbers of unwanted
+EHI <-EHI[,c] #remove unwanted columns
+EHI <- na.omit(EHI) # remove NAs
+
+# find sum for left and right for each participant 
+# create hand data 
+nsub <-length(levels(EHI$subject))
+EHI2 <- data.frame(matrix(ncol = 3, nrow = nsub))
+  colnames(EHI2) <- c("subject", "right_hand", "left_hand")
+
+myrow <- 0 # start row counter
+for (i in 1:nsub) { # loop through subjects
+  myrow <- myrow+1
+  subname <- levels(EHI$subject)[i] # find subject ID
+  myrows <- which(EHI$subject==subname) # select rows for this subject
+  tmp <- data.frame(EHI[myrows,])
+  
+    EHI2$subject[myrow] <- subname # add row for subject
+    EHI2$right_hand[myrow] <- sum(tmp$right_hand) # add row for hand
+    EHI2$left_hand[myrow] <- sum(tmp$left_hand) # add row for number of buttons pressed
+  }
+
+# This is a summary of the EHI
+for_index2 <- 
+  EHI2 %>% 
+  group_by(subject) %>%
+  mutate(index_EHI= ((right_hand-left_hand)/(right_hand + left_hand))*100)
+
+# now create a data frame only for index 
+EHI_index <- select(for_index2, "subject", "index_EHI")
+
+#now plot EHI in relation to handedness (modified by DB)
+x<-ggplot(EHI_index, aes(x=index_EHI, y=subject, fill=subject)) +
+  geom_dotplot(binaxis='y', stackdir='center') + xlim(-100, 100) +
+  ggtitle("Handedness index on the Edinburgh Handedness Inventory") +
+  geom_vline(xintercept = 80, linetype="dashed", colour= "red") + 
+  xlab("Handedness Index ((right_hand-left_hand)/(right_hand + left_hand))*100)") +
+  scale_fill_grey(start = 0.2, end = 0.8, na.value = "red", aesthetics = "fill") 
+x + theme_bw() + theme(legend.position = "none") + theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+
+# add demographics
+demographics <- merge(demographics, for_index2)
+# count those to be removed
+sum(demographics$index_EHI <= 80)
+```
+
+From the plot of handedness indices, a substanital portion of the participants scored below our cut off of 80 on the EHI index. In total, 12 participants were removed at this stage. 
+
+# Experiment processing
+
+Below the experimental data is combined and then relabelled. We then select only the variables of relevance to go into a smaller data frame to work with. 
+
+```{r read exp, warning=FALSE}
+# read long format data into R
+VHF_dat_1 <- read_csv("data_exp_10222-v13_task-cwz5.csv")
+VHF_dat_2 <- read_csv("data_exp_10222-v13_task-doar.csv")
+VHF_dat_3 <- read_csv("data_exp_10222-v13_task-gfqr.csv")
+
+# merge the data
+VHF_dat <- rbind(VHF_dat_1, VHF_dat_2, VHF_dat_3)
+
+# reduce to responses to the section of the trial where a response is required
+VHF_dat <- subset(VHF_dat, display == "task")
+VHF_dat <- subset(VHF_dat, Attempt == 1)
+
+# relabel variables
+VHF_dat$subject <- VHF_dat$`Participant Private ID` # subject as a letter string 
+VHF_dat$status <- VHF_dat$ANSWER # whether a word or non-word
+VHF_dat$accuracy <- VHF_dat$Correct # accurate repsonses
+VHF_dat$RT <- VHF_dat$`Reaction Time` # reaction time
+
+# reformat variables
+# factors (reordering where applicable)
+VHF_dat$subject <- as.factor(VHF_dat$subject)
+VHF_dat$word <- as.factor(VHF_dat$word)
+VHF_dat$condition <- factor(VHF_dat$condition, levels = c("low N", "high N"))
+VHF_dat$status <- as.factor(VHF_dat$status)
+VHF_dat$VF <- factor(VHF_dat$VF, levels= c("CVF", "LVF","RVF"))
+# numeric
+VHF_dat$RT <- as.numeric(VHF_dat$RT)
+VHF_dat$zipf <- as.numeric(VHF_dat$zipf)
+VHF_dat$BG_freq <- as.numeric(VHF_dat$BG)
+
+# reduce the data frame to something more manageable
+wanted <- c("subject", "word", "status", "accuracy", "RT", "condition", "VF", "zipf", "BG_freq", "list", "Correct")
+c <- which(names(VHF_dat) %in% wanted)
+VHF_dat <- VHF_dat[,c]
+
+# make error variable to replace accuracy
+VHF_dat <- VHF_dat %>% mutate(error= ifelse(Correct == 1, 0, 1))
+
+# merge demographics with VHF data
+VHF_dat <- merge(VHF_dat, demographics)
+
+# now remove based on EHI cutoff
+VHF_dat <- subset(VHF_dat, index_EHI >= 80)
+```
+
+Prior to excluding conducting analyses, we remove participants who score below chance (less than 50% accuracy) in any visual field (right, left, and central). 
+
+```{r removal, warning=FALSE}
+# create data frame
+removal_dat <- aggregate(FUN= mean, data= VHF_dat, Correct~ VF + subject)
+# add column asseessing if performance is below 50%
+removal_dat <- removal_dat %>% mutate(remove= ifelse(Correct < .5, 1, 0))
+print(removal_dat <- subset(removal_dat, remove ==1))
+# remove participant
+VHF_dat <- subset(VHF_dat, subject != "1065534")
+VHF_dat <- subset(VHF_dat, subject != "1066122")
+VHF_dat <- subset(VHF_dat, subject != "1066835")
+```
+
+Three participants are removed for scoring below chance in a given visual field. 
+
+## Statistical models
+
+Here we fit (generalised) linear mixed-effects models to error rate and correct reaction times with a 2 (orthographic neighbour; high vs low) x 3 (visual field: RVF, CVF, LVF) fixed effects structure. While Perea et al. included a main effect of counterbalance list in their experiment, analysis of pilot data did not show an increase in model fit when including a fixed effect coding for list.
+
+For analysis, we first specify the following contrast:
+- VF: Helmert contrasts. This enables the following comparisons:  LVF vs RVF, then CVF vs. Average of LVF and RVF.
+- Orthographic N: summed contrasts. This equates to a main effect of Orthographic N. 
+
+### Target word, error
+
+Second, we analyse the error for all target words (regardless of cutoffs) with a GLMM.
+
+```{r targetACC, warning=FALSE}
+# select word targets- this is essential for both RTs and accuracy
+VHF_words <- subset(VHF_dat, status == "word")
+# reorder factor for model
+VHF_words$VF <- factor(VHF_words$VF, levels= c("LVF", "RVF","CVF"))
+# plot the data for error on word targets
+pirateplot(formula = error ~ VF + condition,
+           data = VHF_words,
+           pal = "gray",
+           main= "(A)",
+           ylab= "Proportion of errors")
+# cell means for experimental manipulations
+aggregate(FUN= mean, data= VHF_words, error ~ VF + condition)
+
+# GLMM for error on word targets using intercepts only
+# First, run on all visual fields to compare left and right to central
+# turn error into a factor
+VHF_words$error <- as.factor(VHF_words$error)
+# set contrast
+# set condition VF to represent main effects
+contrasts(VHF_words$condition) <- contr.sum
+# set helmert coding such that the following contrasts are run:  LVF vs RVF, then CVF vs average of LVF and RVF
+contrasts(VHF_words$VF) <- contr.helmert(3)
+# run lmm full 
+word_ACC_model <- glmer(data= VHF_words, error ~ VF * condition +
+                    (1 | subject) +
+                    (1 | word), family = binomial(link = "logit"))
+summary(word_ACC_model)
+# get confidence intervals
+# first, find the SE
+se <- sqrt(diag(vcov(word_ACC_model)))
+# table of estimates with 95% CI
+tab <- cbind(Est = fixef(word_ACC_model), LL = fixef(word_ACC_model) - 1.96 * se, UL = fixef(word_ACC_model) + 1.96 * se)
+```
+
+Referring to our successful replication criteria:
+
+1) We observed reduced errors in the central visual field relative to the right and left visual field. 
+2) We observed reduced errors in the right relative to left visual field. 
+
+### Target word, RT
+
+First, response times are analysed for word targets. Following Perea et al., incorrect responses and reaction times less than 250 ms are excluded. We also exclude RTs greater than 1200 ms. We then apply Hoaglin and Iglewicz’s outlier removal procedure.
+
+
+```{r targetRT, warning=FALSE}
+# start by subsetting
+# for RTs, select the accurate responses and those between 250 and 1500 ms
+VHF_words_RT <- subset(VHF_words, accuracy == 1)
+VHF_words_RT <- subset(VHF_words_RT, RT > 250)
+VHF_words_RT <- subset(VHF_words_RT, RT < 1200)
+
+# outliers for each subject
+VHF_words_RT <- 
+  VHF_words_RT %>% 
+  group_by(subject) %>%
+  mutate(
+    # Identify 25th and 75th quartiles of VHF_words_RT, and the difference between them
+    lower_quartile <- quantile(VHF_words_RT$RT, probs=0.25, na.rm="TRUE"),
+    upper_quartile <- quantile(VHF_words_RT$RT, probs=0.75, na.rm="TRUE"),
+    quartile_diff <- upper_quartile - lower_quartile,
+    # Outliers are defined as being below or above 2.2 times the quartile difference
+    lower_limit <- lower_quartile - 1.65*quartile_diff,
+    upper_limit <- upper_quartile + 1.65*quartile_diff,
+    # create variable
+    remove= ifelse(RT >= upper_limit, 1, 0))
+# remove outliers
+VHF_words_RT <- VHF_words_RT[VHF_words_RT$remove== 0,]
+
+# plot the data for accurate RTs on word targets
+pirateplot(formula = RT ~ VF + condition,
+           data = VHF_words_RT,
+           pal = "gray",
+           main= "(B)",
+           ylab = "Reaction time (ms)")
+# cell means for experimental manipulations
+aggregate(FUN= mean, data= VHF_words_RT, RT ~ VF)
+aggregate(FUN= mean, data= VHF_words_RT, RT ~ VF + condition)
+# create data frame for comparison plot
+VF <- c("LVF", "LVF", "RVF", "RVF", "CVF", "CVF", "LVF", "LVF", "RVF", "RVF", "CVF", "CVF")
+N <- c("low-N", "high-N", "low-N", "high-N", "low-N","high-N", "low-N", "high-N", "low-N", "high-N", "low-N","high-N")
+RT <- c(580,557,521,549,481,479, 773.9754, 749.2498, 715.5886, 726.1308, 684.5381, 676.0317)
+study <- c("Perea", "Perea", "Perea", "Perea", "Perea", "Perea", "Parker", "Parker", "Parker", "Parker", "Parker", "Parker")
+sim <- data.frame(VF, N, RT, study)
+sim$VF <- factor(sim$VF, levels= c("LVF", "RVF", "CVF"))
+sim$N <- factor(sim$N, levels= c("low-N", "high-N"))
+ggplot(data=sim, aes(x=VF, y=RT, group= N, color=N)) +
+  geom_line(aes(linetype= N))+
+  geom_point()+ggtitle("Comparison of cell means for Parker et al. and Perea et al.")+
+  ylab("Reaction time (ms)") + xlab("Visual field") + theme(legend.title = element_blank()) +
+  facet_wrap(.~study) + scale_color_grey(start = .0, end= .5) + theme_bw()
+
+# reorder factor for model
+VHF_words_RT$VF <- factor(VHF_words_RT$VF, levels= c("LVF", "RVF", "CVF"))
+
+# LMM for correct RTs on word targets using intercepts only
+# set contrast
+# set condition VF to represent main effects
+contrasts(VHF_words_RT$condition) <- contr.sum
+# set helmert coding such that the following contrasts are run:  LVF vs RVF, then CVF vs average of LVF and RVF
+contrasts(VHF_words_RT$VF) <- contr.helmert(3)
+# run lmm full on log RT to address exteded right tail
+word_RT_model_log <- lmer(data = VHF_words_RT, log10(RT) ~ VF * condition +
+                    (1 | subject) +
+                    (1 | word),
+                    control=lmerControl(optCtrl=list(maxfun=20000)))
+summary(word_RT_model_log)
+# get confidence intervals
+confint.merMod(word_RT_model_log)
+```
+
+Referring to our successful replication criteria:
+
+1) We observed faster RTs in the central visual field relative to the right and left visual field. 
+2) We observed faster RTs in the right relative to left visual field. 
+3) We observed a facilitative effect of orthographic neighbourhood in the left visual field (i.e., right hemisphere) and an inhibitory effect of orthographic neighbourhood in the right visual field (left hemisphere) in RTs. 
+
+# Demographics for final sample
+
+Next, we calculate mean age, EHI, and obtain a count for gender.
+
+``` {r participant summary}
+# first, remove the EHIs less than 80
+demographics_final <- subset(demographics, index_EHI >= 80)
+# now removed those who scored below chance
+demographics_final <- subset(demographics_final, subject != "1065534")
+demographics_final <- subset(demographics_final, subject != "1066122")
+demographics_final <- subset(demographics_final, subject != "1066835")
+
+# mean age
+demographics_final$age <- as.numeric(demographics_final$age)
+demographics_final %>% summarise(mean=mean(age), n(), sd=sd(age))
+
+# count gender
+demographics_final %>% group_by(gender) %>% summarise(n())
+# NOTE. 'Other' is non-binary.
+```
+
+# Non-registered analysis
+
+## Survival anlaysis 
+
+Distributional analysis is used here to determine when the effect of orthographic N emerges over the course of lexical identification. 
+
+### t test for divergence
+
+```{r diverge t}
+# now data are read in run survival
+library(RTsurvival)
+
+#create df
+pdiverge <- data.frame(matrix(ncol = 3, nrow = 30*2))
+colnames(pdiverge) <- c("subject", "VF", "DP")
+# select only Right and Left
+VHF_words_RT <- VHF_words_RT[VHF_words_RT$VF != "CVF",]
+# remove
+VHF_words_RT <- VHF_words_RT[!is.na(VHF_words_RT$RT),]
+# re-read
+VHF_words_RT <- read.csv("data_test.csv")
+# refactor
+VHF_words_RT$subject <- as.factor(VHF_words_RT$subject)
+# subject counter
+nsub= 30
+
+myrow <- 0 # start row counter
+for (i in 1:nsub) { # loop through subjects
+  subname <- levels(VHF_words_RT$subject)[i] # find subject ID
+  myrows <- which(VHF_words_RT$subject==subname) # select rows for this subject
+  tmp <- data.frame(VHF_words_RT[myrows,])
+  myvf <- c('LVF','RVF')
+  for (j in 1:2) {
+    myrow <- myrow+1
+    w<- which(tmp$VF== myvf[j]) # find hemifield
+    tmp1 <- tmp[w,]
+    
+    ci.dpa <- DPA.ci(tmp1$subject, tmp1$RT, tmp1$condition, quiet = TRUE, binsize = 1, window = 1200, n.boot = 10000)
+    
+    pdiverge$subject[myrow] <- subname # add row for subject
+    pdiverge$VF[myrow] <- myvf[j] # add row for visual field
+    pdiverge$DP[myrow] <- ci.dpa[2] # add row for visual field
+
+  }
+}
+shapiro.test(as.numeric(pdiverge$DP))
+t.test(as.numeric(pdiverge$DP)~ pdiverge$VF, paired= TRUE)
+pirateplot(formula = as.numeric(pdiverge$DP)~ VF,
+           data = pdiverge,
+           pal = "gray",
+           main= "",
+           ylim = c(200,1200),
+           ylab = "Divergence point (ms)")
+```
+
+<<<<<<< HEAD
+This suggests that the effects diverge at different rates in each hemisphere.
+
+## Individual level data
+
+### Field differences at the participant level
+
+Let's just look at the rate at which inidividual participants how patterns of facilitation and inhibiton across the visual fields. We then run t-tests here using all data. 
+
+```{r p.pattern}
+# get subject level data
+sub.dat <- aggregate(FUN= mean, data= VHF_words_RT, RT ~ VF+ condition + subject)
+# turn to wide for ease
+sub.wide <- tidyr::spread(sub.dat, condition, RT)
+# calc differences score
+sub.wide$dif <- sub.wide$`high N` - sub.wide$`low N`
+# order
+sub.wide$VF <- factor(sub.wide$VF, levels= c("LVF", "CVF","RVF"))
+# plot
+ggplot(sub.wide, aes(x=VF, y=dif, fill=VF)) +
+  geom_violin(alpha= .1) +
+  geom_hline(yintercept=0, linetype="dashed",  color = "black", size=1) + 
+  geom_dotplot(binaxis='y', stackdir='center') + 
+  scale_fill_grey(start = 0.3, end = .9) +
+  theme_classic() + xlab(" ") + ylab("Nsize difference") + theme(legend.position="top")
+# now let's work out how many people show facilitaion and inhibition
+sub.wide <- sub.wide %>%
+  mutate(effect= if_else(sub.wide$dif > 0, "inhibit", "facilit"))
+# count
+table(sub.wide$effect, sub.wide$VF)
+```
+
+From the data, it seems that there is a a fair spread in the difference across visual fields. In the LVF 20/30 show a faciliatory effect and in RVF 19/30 show an inhibitory effect. There is pretty much a 50/50 spilt for inhibition and faciliation in the CVF. 
+
+A good idea would be to considewr why some participants show this and others do not. Could it be something to do with lateralisation? I.e. do those who are right lateralised show the same pattern as those who are left lateralised. 
+
+### LI calculation
+
+Here we create some lateralisty indices and assess whether participants are lateralised.
+
+```{r LIs}
+# get subject level data for R and L VF
+LI.dat <- aggregate(FUN= mean, data= VHF_words_RT, RT ~ VF +subject)
+# remove central
+LI.dat <- LI.dat[LI.dat$VF != "CVF",]
+# turn to wide for ease
+LI.wide <- tidyr::spread(LI.dat, VF, RT)
+# create LI
+LI.wide$LI <- 100*(LI.wide$RVF - LI.wide$LVF)/(LI.wide$RVF + LI.wide$LVF)
+# now code those who are left and right hemisphere dominant
+LI.wide <- LI.wide %>%
+  mutate(hemisphere= if_else(LI.wide$LI > 0, "RH", "LH"))
+# just have LI and categorise
+LI <- dplyr::select(LI.wide, subject, hemisphere, LI)
+# add LIs to sub.wide
+sub.wide <- merge(sub.wide, LI, by= "subject")
+# now replot with hemisphere
+ggplot(sub.wide, aes(x=VF, y=dif, fill=VF)) +
+  geom_violin(alpha= .1) +
+  geom_hline(yintercept=0, linetype="dashed",  color = "black", size=1) + 
+  geom_dotplot(binaxis='y', stackdir='center') + 
+  scale_fill_grey(start = 0.3, end = .9) +
+  theme_classic() + xlab(" ") + ylab("Nsize difference") + theme(legend.position="top") + facet_wrap(.~ hemisphere)
+# create table
+table(sub.wide$effect, sub.wide$VF, sub.wide$hemisphere)
+```
+
+Really, when looking at the participant level, we just can say as we have too few participants.
+
+Let's correlate the difference scores with LIs instead
+
+```{r corrs dif}
+# LVF
+cor(sub.wide[sub.wide$VF== "LVF",]$LI, sub.wide[sub.wide$VF== "LVF",]$dif)
+ggplot(sub.wide[sub.wide$VF== "LVF",], aes(x=LI, y=dif)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=TRUE, fullrange=TRUE)+
+  theme_classic() + ylim(-200, 200) + 
+  ylab("RT differeence (high N - low N)") + xlab("Laterality Index") + ggtitle("LVF")
+# CVF
+cor(sub.wide[sub.wide$VF== "CVF",]$LI, sub.wide[sub.wide$VF== "CVF",]$dif)
+ggplot(sub.wide[sub.wide$VF== "CVF",], aes(x=LI, y=dif)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=TRUE, fullrange=TRUE)+
+  theme_classic() + ylim(-200, 200) + 
+  ylab("RT differeence (high N - low N)") + xlab("Laterality Index") + ggtitle("CVF")
+# RVF
+cor(sub.wide[sub.wide$VF== "RVF",]$LI, sub.wide[sub.wide$VF== "RVF",]$dif)
+ggplot(sub.wide[sub.wide$VF== "RVF",], aes(x=LI, y=dif)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=TRUE, fullrange=TRUE)+
+  theme_classic() + ylim(-200, 200) + 
+  ylab("RT differeence (high N - low N)") + xlab("Laterality Index") + ggtitle("RVF")
+```
+
+There appears to be no relationship between the LIs from the task and the extent of faciliation or inhibition when processing words with many or few neighbours in any visual field. however, there is something odd about using the task define LI to measure performance on it.
+
+# References
+
+- Oldfield, R. C. (1971). The assessment and analysis of handedness: the Edinburgh inventory. Neuropsychologia, 9(1), 97-113.
+- Perea, M., Acha, J., & Fraga, I. (2008). Lexical competition is enhanced in the left hemisphere: Evidence from different types of orthographic neighbors. Brain and Language, 105(3), 199-210. http://dx.doi.org/10.1016/j.bandl.2007.08.005
